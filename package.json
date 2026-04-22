@@ -1,0 +1,15 @@
+{
+  "name": "job-freshness-workspace",
+  "private": true,
+  "scripts": {
+    "dev:backend": "node tools/backend-command.mjs -m uvicorn job_freshness.api.server:app --reload --host 0.0.0.0 --port 8080",
+    "dry-run:backend": "node tools/backend-command.mjs -m job_freshness.main --pt 20260402 --mode dry-run",
+    "test:backend": "node tools/backend-command.mjs -m pytest -q",
+    "test:backend:unit": "node tools/backend-command.mjs -m pytest tests/unit -q",
+    "test:backend:integration": "node tools/backend-command.mjs -m pytest tests/integration -q",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "build:frontend": "npm --prefix frontend run build",
+    "clean:frontend": "npm --prefix frontend run clean"
+  }
+}

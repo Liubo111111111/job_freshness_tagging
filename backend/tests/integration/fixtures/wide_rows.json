@@ -1,0 +1,62 @@
+[
+  {
+    "_scenario": "has_signal — 明确时效信号，高置信度，走 formal 路由",
+    "user_id": "U001",
+    "info_id": "JOB_HAS_SIGNAL_001",
+    "job_detail": "明天下午开工，要5个小工，做两天。工地在朝阳区，包午饭。",
+    "occupation_id": "OCC_001",
+    "sub_id": null,
+    "asr_result": "",
+    "im_text": "老板: 下午两点到\n工人: 好的明天见",
+    "complaint_content": "",
+    "im_message_count": 2,
+    "call_record_count": 0,
+    "complaint_count": 0,
+    "publish_time": "2026-04-20 08:00:00"
+  },
+  {
+    "_scenario": "no_signal — 无时效信号，走 formal 路由（no_signal 也可以是高置信）",
+    "user_id": "U002",
+    "info_id": "JOB_NO_SIGNAL_002",
+    "job_detail": "长期招聘保安，有经验优先，待遇面议。",
+    "occupation_id": "OCC_002",
+    "sub_id": null,
+    "asr_result": "",
+    "im_text": "",
+    "complaint_content": "",
+    "im_message_count": 0,
+    "call_record_count": 0,
+    "complaint_count": 0,
+    "publish_time": "2026-04-15 10:00:00"
+  },
+  {
+    "_scenario": "conflict — 时效信号冲突，低置信度，走 fallback 路由",
+    "user_id": "U003",
+    "info_id": "JOB_CONFLICT_003",
+    "job_detail": "周一开工，做三天。下周五也要人。",
+    "occupation_id": "OCC_003",
+    "sub_id": "SUB_A",
+    "asr_result": "【通话1 2026-04-18 14:30:00】\n下个月再说吧",
+    "im_text": "【会话1 2026-04-19 09:00:00】\n老板: 明天来\n工人: 你不是说下周吗",
+    "complaint_content": "【投诉1 2026-04-20 11:00:00】\n已招满",
+    "im_message_count": 5,
+    "call_record_count": 1,
+    "complaint_count": 1,
+    "publish_time": "2026-04-14 07:30:00"
+  },
+  {
+    "_scenario": "cannot_determine — 模糊信号无法确定，低置信度，走 fallback 路由",
+    "user_id": "U004",
+    "info_id": "JOB_CANNOT_DETERMINE_004",
+    "job_detail": "尽快到岗，短期工作。",
+    "occupation_id": "OCC_004",
+    "sub_id": null,
+    "asr_result": "",
+    "im_text": "",
+    "complaint_content": "【投诉1 2026-04-19 16:00:00】\n电话打不通",
+    "im_message_count": 0,
+    "call_record_count": 3,
+    "complaint_count": 1,
+    "publish_time": "2026-04-10 09:00:00"
+  }
+]

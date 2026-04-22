@@ -1,0 +1,53 @@
+[project]
+name = "job-freshness"
+version = "0.1.0"
+description = "Enterprise industry classification pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # core
+    "pydantic>=2.8,<3.0",
+    "pydantic-settings>=2.0,<3.0",
+    "PyYAML>=6.0,<7.0",
+    "python-dotenv>=1.0,<2.0",
+    # llm / graph
+    "langgraph>=0.2,<0.3",
+    "httpx>=0.27,<1.0",
+    # api
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "python-multipart>=0.0.9,<1.0",
+    # data
+    "pyodps>=0.12,<1.0",
+    # auth (feishu oauth uses standard-library only, but httpx already listed)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<2.0",
+    "hypothesis>=6.0,<7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+job_freshness = ["taxonomy_config.yaml", "prompts/*.yaml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.uv]
+dev-dependencies = [
+    "hypothesis>=6.152.1",
+    "pytest>=8.4.2",
+]

@@ -1,0 +1,38 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node.js
+node_modules/
+
+# Build / logs
+dist/
+build/
+coverage/
+*.log
+temp/
+test
+.kiro/
+.tmp-tests/
+docs/
+doc/
+.venv/
+backend/.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+.env.*
+!.env.example
+output/
+.kiro
+frontend/.vite/

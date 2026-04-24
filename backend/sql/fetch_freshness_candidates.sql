@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS yuapo_dev.ads_freshness_candidates (
     im_message_count      BIGINT    COMMENT 'IM会话总次数',
     call_record_count     BIGINT    COMMENT '通话记录总次数',
     complaint_count       BIGINT    COMMENT '投诉总次数',
+    first_complaint_time  STRING    COMMENT '最早一次投诉时间',
     publish_time          STRING    COMMENT '职位发布时间'
 )
 PARTITIONED BY (
@@ -194,7 +195,8 @@ complaint AS (
         CONCAT_WS('\n', COLLECT_LIST(
             CONCAT('【投诉', CAST(rn AS STRING), ' ', complaint_time, '】\n', COALESCE(complaint_content, ''))
         )) AS complaint_content,
-        COUNT(*) AS complaint_count
+        COUNT(*) AS complaint_count,
+        MIN(complaint_time) AS first_complaint_time
     FROM complaint_detail
     GROUP BY target_info_id
 ),
@@ -233,6 +235,7 @@ SELECT
     COALESCE(imc.im_message_count, 0)          AS im_message_count,
     COALESCE(cc.call_record_count, 0)          AS call_record_count,
     COALESCE(com.complaint_count, 0)           AS complaint_count,
+    com.first_complaint_time                   AS first_complaint_time,
     FROM_UNIXTIME(j.add_time)                  AS publish_time
 FROM job_base j
 LEFT JOIN asr_agg a         ON a.info_id = j.info_id

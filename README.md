@@ -281,6 +281,7 @@ npm run lint:frontend
 | `im_message_count`　| int ≥ 0 | IM 消息数　　 |
 | `call_record_count` | int ≥ 0 | 通话记录数　　|
 | `complaint_count`　 | int ≥ 0 | 投诉次数　　　|
+| `first_complaint_time` | str? | 最早一次投诉时间 |
 | `publish_time`      | str?    | 职位发布时间　|
 
 ### 输出

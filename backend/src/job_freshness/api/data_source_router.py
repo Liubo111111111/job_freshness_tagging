@@ -20,6 +20,7 @@ from typing import Any
 
 from job_freshness.api.schemas import StatsResponse
 from job_freshness.api.services import (
+    OnlineQueryService,
     RunService,
     SearchService,
     StatsService,
@@ -128,7 +129,14 @@ class DataSourceRouter:
             "stats_service": StatsService(sqlite_path=sql),
             "run_service": RunService(sqlite_path=sql),
             "search_service": SearchService(sqlite_path=sql),
+            "online_query_service": OnlineQueryService(partition_dir=partition_dir),
         }
+
+    def build_online_query_service(self, pt: str) -> OnlineQueryService:
+        """Build online query service for the given *pt*, creating the partition if needed."""
+        partition_dir = self.resolve_dir(pt)
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        return OnlineQueryService(partition_dir=partition_dir)
 
     # ------------------------------------------------------------------
     # helpers
@@ -248,8 +256,7 @@ class DataSourceRouter:
                 f"pt_start ({pt_start}) must not be later than pt_end ({pt_end})"
             )
 
-        temporal_status_dist: dict[str, int] = {}
-        signal_type_dist: dict[str, int] = {}
+        validity_type_dist: dict[str, int] = {}
         total_count = 0
         formal_count = 0
         fallback_count = 0
@@ -277,17 +284,15 @@ class DataSourceRouter:
                         elif route == "fallback":
                             fallback_count += cnt
 
-                    # temporal_status 分布（从 decision_record_json 提取）
+                    # validity_type 分布（从 decision_record_json 提取）
                     decision_rows = conn.execute(
                         "SELECT decision_record_json FROM pipeline_runs WHERE decision_record_json IS NOT NULL"
                     ).fetchall()
                     for (dr_json,) in decision_rows:
                         try:
                             dr = json.loads(dr_json)
-                            ts = dr.get("temporal_status", "unknown")
-                            temporal_status_dist[ts] = temporal_status_dist.get(ts, 0) + 1
-                            st = dr.get("signal_type", "unknown")
-                            signal_type_dist[st] = signal_type_dist.get(st, 0) + 1
+                            vt = dr.get("validity_type", "unknown")
+                            validity_type_dist[vt] = validity_type_dist.get(vt, 0) + 1
                         except (json.JSONDecodeError, TypeError):
                             continue
                 except sqlite3.OperationalError:
@@ -298,8 +303,7 @@ class DataSourceRouter:
                 logger.debug("Failed to open SQLite at %s", db_path, exc_info=True)
 
         return StatsResponse(
-            temporal_status_distribution=temporal_status_dist,
-            signal_type_distribution=signal_type_dist,
+            validity_type_distribution=validity_type_dist,
             total_count=total_count,
             formal_count=formal_count,
             fallback_count=fallback_count,

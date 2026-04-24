@@ -1,84 +1,59 @@
 # signal_detection prompt v1
-# 时效信号检测：从全文证据中判断有无时效信号和信号类型，规则命中作为辅助提示
+# 时效信号检测：从全文证据中判断有无时效信号和信号类型
 
 system: |
   你是一个职位时效性信号检测专家。你的任务是根据提供的全文证据（evidence_text），判断该职位是否包含时效性信号。
 
   ## 核心规则
 
-  1. 仅从文本证据判断有无时效信号和信号类型，投诉文本和计数特征仅为辅助参考，不可用于伪造时间戳。
-  2. 你只需要判断信号的存在性和类型，不需要归一化时间字段（如 work_start_at、recruitment_valid_until）。
-  3. 如果文本证据不足以判断，请诚实输出 cannot_determine。
+  1. 从文本证据判断有无时效信号和信号类型。
+  2. 你只需要判断信号的存在性和类型，不需要归一化时间字段。
+  3. 如果文本证据不足以判断，请输出 cannot_determine。
   4. 如果文本证据存在矛盾且无法调和，请输出 conflict。
 
   ## 输入说明
 
-  payload 中包含以下字段：
-
-  - **evidence_text**：包含三个来源的完整清洗后文本：
-    - `job_detail` — 职位详情文本
-    - `im_text` — IM 消息文本
-    - `asr_text` — 通话 ASR 转写文本
-    你应该分析这些全文内容来判断时效信号。
-
-  - **rule_matches**：规则引擎预检测到的时间相关词汇命中（仅供参考，不一定完整）：
-    - 每条包含 `source`（来源）、`matched_bucket`（命中桶类型）、`matched_terms`（命中词汇列表）
-    - 这些是规则匹配的提示，帮助你快速定位可能的时效信号位置
-    - 你应该以全文分析为主，rule_matches 仅作为辅助线索
+  - **evidence_text**：三个来源的完整清洗后文本（job_detail、im_text、asr_text）
+  - **rule_matches**：规则引擎预检测到的时间相关词汇命中（仅供参考提示，不一定完整）
+  - **publish_time**：职位发布时间，用于解析相对时间
 
   ## 时间上下文
 
-  - **publish_time**（职位发布时间）：招聘开始的锚点时间。结合文本中的相对时间表述（如"明天"、"下周"），可判断该时间指向的实际日期。如果 publish_time 距今很久，文本中的"明天"可能已过期。
-  - **evidence_text 中的时间标记**：文本中可能包含带时间戳的通话或 IM 会话标记：
-    - `【通话1 2026-04-14 10:30:00】` — 该段通话发生时间
-    - `【会话1 2026-04-13 15:20:00】` — 该段 IM 会话开始时间
-    这些时间戳是解析相对时间的关键锚点。
+  文本中可能包含带时间戳的标记：
+  - `【通话1 2026-04-14 10:30:00】` — 通话发生时间
+  - `【会话1 2026-04-13 15:20:00】` — IM 会话开始时间
 
-  **时间推理示例**：
-  - publish_time = "2026-04-01"，文本来自【通话1 2026-04-14】，内容"明天来上班" → 实际指 2026-04-15
-  - publish_time = "2026-04-01"，文本来自【会话1 2026-04-02】，内容"后天到岗" → 实际指 2026-04-04
-  - 多条通话/会话中的时间信号互相矛盾（如通话1说"明天来"，通话2说"下周再说"）→ 输出 conflict
+  **相对时间解析**：以所在会话的时间戳为锚点。如【通话1 2026-04-14】下说"明天来" → 实际指 2026-04-15。
 
   ## temporal_status 取值
 
-  - has_signal: 文本中存在明确的时效性信号
-  - no_signal: 文本中不存在任何时效性信号
+  - has_signal: 存在明确的时效性信号
+  - no_signal: 不存在任何时效性信号
   - cannot_determine: 文本证据不足以判断
-  - conflict: 文本中存在矛盾的时效性信号
+  - conflict: 存在矛盾的时效性信号
 
   ## signal_type 取值
 
-  - absolute_datetime: 明确的日期时间（如"明天下午两点"、"4月5号"）
-  - date_range: 日期范围（如"4月5号到4月10号"）
-  - relative_time: 相对时间（如"下周一"、"后天"）
-  - duration_only: 仅有工期无锚定时间（如"干两天"、"做一周"）
-  - holiday_window: 节假日窗口（如"五一期间"、"国庆后"）
-  - vague_time: 模糊时间（如"尽快"、"这两天"）
-  - no_signal: 无信号
-  - conflict: 矛盾信号
+  - absolute_datetime: 明确的日期时间
+  - date_range: 日期范围
+  - relative_time: 相对时间
+  - duration_only: 仅有工期无锚定时间
+  - holiday_window: 节假日窗口
+  - vague_time: 模糊时间
+  - no_signal / conflict
 
   ## 输出格式
-
-  请严格输出以下 JSON 格式，不要添加任何额外文字：
 
   ```json
   {
     "has_temporal_signal": true/false,
     "temporal_status": "has_signal|no_signal|cannot_determine|conflict",
-    "signal_type": "absolute_datetime|date_range|relative_time|duration_only|holiday_window|vague_time|no_signal|conflict",
+    "signal_type": "...",
     "evidence_summary": ["来源: 关键文本片段"],
     "confidence": 0.0~1.0,
     "cannot_determine_reason": null 或 "原因说明"
   }
   ```
-
-  ## 注意事项
-
-  - evidence_summary 中每条记录格式为 "来源: 关键文本"，如有时间戳请一并标注
-  - confidence 反映你对判断结果的确信程度
-  - 当 temporal_status 为 cannot_determine 时，必须填写 cannot_determine_reason
-  - 当 temporal_status 为 no_signal 时，signal_type 也应为 no_signal
-  - risk_context 中的投诉文本和计数仅供参考背景，绝对不可用来推断或伪造时间信息
 
 user: |
   请分析以下职位的时效性信号：

@@ -162,12 +162,10 @@ def run_once(
                 signal_type="no_signal",
                 confidence=1.0,
             ),
-            "risk_record": RiskRecord(confidence=0.9),
+            "risk_record": RiskRecord(),
             "decision_record": FreshnessDecisionRecord(
-                temporal_status="no_signal",
-                signal_type="no_signal",
-                confidence=0.95,
-                decision_reason="片段召回为空，无时效信号和风险信号，跳过 LLM 推理",
+                validity_type="no_validity",
+                reason="片段召回为空，无时效信号和风险信号，跳过 LLM 推理",
                 low_confidence=False,
             ),
             "route": "formal",
@@ -184,15 +182,9 @@ def run_once(
     if state.error_type is not None:
         return fallback_writer.run(state)
 
-    # Step 3: risk_assess
-    risk_service = RiskAssessService(
-        client=client,
-        model_version=state.model_version_risk,
-        prompt_version=state.prompt_version_risk,
-    )
+    # Step 3: risk_assess（纯规则，不需要 LLM）
+    risk_service = RiskAssessService()
     state = risk_service.run(state)
-    if state.error_type is not None:
-        return fallback_writer.run(state)
 
     # Step 4: time_normalization（条件执行）
     norm_service = TimeNormalizationService(
@@ -361,12 +353,10 @@ def run_dry_run(pt: str, cases_path: str | None = None) -> dict[str, Any]:
                     signal_type="no_signal",
                     confidence=1.0,
                 ),
-                "risk_record": RiskRecord(confidence=0.9),
+                "risk_record": RiskRecord(),
                 "decision_record": FreshnessDecisionRecord(
-                    temporal_status="no_signal",
-                    signal_type="no_signal",
-                    confidence=0.95,
-                    decision_reason="片段召回为空，跳过 LLM 推理",
+                    validity_type="no_validity",
+                    reason="片段召回为空，跳过 LLM 推理",
                     low_confidence=False,
                 ),
                 "route": "formal",
@@ -380,11 +370,7 @@ def run_dry_run(pt: str, cases_path: str | None = None) -> dict[str, Any]:
             state = detection_service.run(state)
 
             if state.error_type is None:
-                risk_service = RiskAssessService(
-                    client=mock_client,
-                    model_version=state.model_version_risk,
-                    prompt_version=state.prompt_version_risk,
-                )
+                risk_service = RiskAssessService()
                 state = risk_service.run(state)
 
             if state.error_type is None:
@@ -414,8 +400,8 @@ def run_dry_run(pt: str, cases_path: str | None = None) -> dict[str, Any]:
             "info_id": wide_row.info_id,
             "scenario": scenario,
             "route": state.route,
-            "temporal_status": state.decision_record.temporal_status if state.decision_record else None,
-            "confidence": state.decision_record.confidence if state.decision_record else None,
+            "validity_type": state.decision_record.validity_type if state.decision_record else None,
+            "estimated_expiry": state.decision_record.estimated_expiry if state.decision_record else None,
             "error_type": state.error_type,
         })
 

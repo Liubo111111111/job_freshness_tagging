@@ -48,3 +48,11 @@ class JsonlKeyedStore(MutableMapping[str, dict[str, Any]]):
         if payload:
             payload += "\n"
         self.path.write_text(payload, encoding="utf-8")
+
+    def delete_by_prefix(self, prefix: str) -> None:
+        with self._lock:
+            keys = [key for key in self._data if key.startswith(prefix)]
+            for key in keys:
+                del self._data[key]
+            if keys:
+                self.flush()

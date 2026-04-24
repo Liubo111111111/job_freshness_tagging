@@ -316,6 +316,34 @@ class SqliteResultStore:
             )
             self._conn.commit()
 
+    def delete_entity(self, entity_key: str) -> None:
+        with self._lock:
+            run_ids = [
+                row[0]
+                for row in self._conn.execute(
+                    "select run_id from pipeline_runs where entity_key = ?",
+                    (entity_key,),
+                ).fetchall()
+            ]
+            if run_ids:
+                self._conn.executemany(
+                    "delete from inference_steps where run_id = ?",
+                    [(run_id,) for run_id in run_ids],
+                )
+            self._conn.execute(
+                "delete from annotations where entity_key = ?",
+                (entity_key,),
+            )
+            self._conn.execute(
+                "delete from published_records where entity_key = ?",
+                (entity_key,),
+            )
+            self._conn.execute(
+                "delete from pipeline_runs where entity_key = ?",
+                (entity_key,),
+            )
+            self._conn.commit()
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

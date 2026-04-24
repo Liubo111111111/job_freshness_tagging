@@ -11,7 +11,6 @@ from typing import Any
 import yaml
 
 from job_freshness.graph_state import GraphState
-from job_freshness.schemas import RiskContext
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +26,16 @@ def _load_prompt_template(version: str) -> dict[str, str]:
 
 
 def build_signal_detection_payload(state: GraphState) -> dict[str, Any]:
-    """构建传给 LLM 的 payload（全文 + 非 complaint 规则命中摘要 + 辅助上下文）。"""
+    """构建传给 LLM 的 payload（全文 + 规则命中摘要）。"""
     wide = state.wide_row
     recall = state.snippet_recall_record
 
-    # 全文证据（由 WideRow 清洗后的文本）
     evidence_text: dict[str, str] = {
         "job_detail": wide.job_detail,
         "im_text": wide.im_text,
         "asr_text": wide.asr_result,
     }
 
-    # 规则命中摘要（仅非 complaint 桶）
     rule_matches: list[dict[str, Any]] = []
     if recall:
         for m in recall.matches:
@@ -49,19 +46,11 @@ def build_signal_detection_payload(state: GraphState) -> dict[str, Any]:
                     "matched_terms": m.matched_terms,
                 })
 
-    risk_context = RiskContext(
-        complaint_text=wide.complaint_content,
-        im_message_count=wide.im_message_count,
-        call_record_count=wide.call_record_count,
-        complaint_count=wide.complaint_count,
-    )
-
     return {
         "job_id": wide.info_id,
         "publish_time": wide.publish_time,
         "evidence_text": evidence_text,
         "rule_matches": rule_matches,
-        "risk_context": risk_context.model_dump(),
     }
 
 

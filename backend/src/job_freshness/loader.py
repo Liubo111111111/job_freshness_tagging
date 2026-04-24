@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,20 @@ from pydantic import ValidationError
 from job_freshness.schemas import WideRow
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# 投诉时间戳提取正则 — 匹配【投诉N 2026-04-18 15:30:00】格式
+# ---------------------------------------------------------------------------
+_COMPLAINT_TS_RE = re.compile(
+    r"【投诉\d+\s+(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{1,2}:\d{1,2})】"
+)
+
+
+def _normalize_ts(ts: str) -> str:
+    """将 '2026-04-20 20:52:5' 补零为 '2026-04-20 20:52:05' 以便正确排序。"""
+    date_part, time_part = ts.split(None, 1)
+    h, m, s = time_part.split(":")
+    return f"{date_part} {h.zfill(2)}:{m.zfill(2)}:{s.zfill(2)}"
 
 # ---------------------------------------------------------------------------
 # SQL 列名 → WideRow 字段名映射
@@ -90,6 +105,16 @@ def _normalize_row(raw: dict[str, Any]) -> dict[str, Any]:
     for field_name, default_value in _OPTIONAL_TEXT_FIELDS.items():
         if field_name not in normalized or normalized[field_name] is None:
             normalized[field_name] = default_value
+
+    # 从 complaint_content 文本中提取最早投诉时间（如果尚未提供）
+    if not normalized.get("first_complaint_time"):
+        complaint_text = str(normalized.get("complaint_content") or "")
+        timestamps = _COMPLAINT_TS_RE.findall(complaint_text)
+        if timestamps:
+            # 补零归一化后排序，确保 "20:52:5" → "20:52:05" 正确比较
+            normalized["first_complaint_time"] = min(
+                timestamps, key=_normalize_ts
+            )
 
     return normalized
 

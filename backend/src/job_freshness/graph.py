@@ -141,15 +141,9 @@ def _time_normalization_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _risk_assess_node(state: dict[str, Any]) -> dict[str, Any]:
-    """risk_assess 节点：从投诉文本和计数特征评估风险。"""
+    """risk_assess 节点：纯规则，从投诉文本判断是否已招满。"""
     graph_state = GraphState.model_validate(state)
-    settings = load_llm_settings()
-    client = HttpLLMClient(settings)
-    service = RiskAssessService(
-        client=client,
-        model_version=graph_state.model_version_risk,
-        prompt_version=graph_state.prompt_version_risk,
-    )
+    service = RiskAssessService()
     updated = service.run(graph_state)
     return _diff_state(graph_state, updated)
 
@@ -175,16 +169,9 @@ def _formal_output_node(state: dict[str, Any]) -> dict[str, Any]:
 
     record: dict[str, Any] = {
         "info_id": graph_state.entity_key,
-        "temporal_status": decision.temporal_status if decision else "no_signal",
-        "signal_type": decision.signal_type if decision else "no_signal",
-        "work_start_at": decision.work_start_at if decision else None,
-        "recruitment_valid_until": decision.recruitment_valid_until if decision else None,
-        "confidence": decision.confidence if decision else 0.0,
-        "stale_risk_hint": decision.stale_risk_hint if decision else False,
-        "complaint_risk_hint": (
-            decision.complaint_risk_hint.model_dump() if decision else {}
-        ),
-        "evidence_summary": decision.evidence_summary if decision else [],
+        "validity_type": decision.validity_type if decision else "no_validity",
+        "estimated_expiry": decision.estimated_expiry if decision else None,
+        "reason": decision.reason if decision else "",
         "audit": {
             "run_id": graph_state.run_id,
             "entity_key": graph_state.entity_key,
@@ -202,9 +189,9 @@ def _formal_output_node(state: dict[str, Any]) -> dict[str, Any]:
     }
 
     logger.info(
-        "formal_output job_id=%s status=%s",
+        "formal_output job_id=%s validity_type=%s",
         graph_state.entity_key,
-        record["temporal_status"],
+        record["validity_type"],
     )
     # 实际写入由外部 batch runner 负责，此处仅标记 route
     return {"route": "formal"}

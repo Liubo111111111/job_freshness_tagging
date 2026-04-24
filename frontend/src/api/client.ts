@@ -10,14 +10,19 @@ import type {
   FallbackRecord,
   ReviewRequest,
   ReviewResponse,
+  AnnotationRequest,
+  AnnotationResponse,
   SettingsResponse,
   SettingsUpdate,
   DatesResponse,
   DailySummaryResponse,
+  OnlineQueryRequest,
+  OnlineQueryResponse,
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
-const TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 10_000;
+const ONLINE_QUERY_TIMEOUT_MS = 120_000;
 
 // snake_case → camelCase deep converter
 function toCamelCase(obj: unknown): unknown {
@@ -54,18 +59,23 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+type RequestOptions = RequestInit & {
+  timeoutMs?: number;
+};
+
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options ?? {};
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const resp = await fetch(`${BASE_URL}${path}`, {
-      ...options,
+      ...fetchOptions,
       credentials: 'include',
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        ...options?.headers,
+        ...fetchOptions.headers,
       },
     });
 
@@ -116,9 +126,10 @@ export const api = {
     request<StatsResponse>(`/stats?pt_start=${ptStart}&pt_end=${ptEnd}`),
 
   // --- Runs ---
-  getRuns: (offset = 0, limit = 20, pt?: string) => {
+  getRuns: (offset = 0, limit = 20, pt?: string, annotationStatus?: 'annotated' | 'unannotated') => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     if (pt) params.set('pt', pt);
+    if (annotationStatus) params.set('annotation_status', annotationStatus);
     return request<PaginatedResponse<RunSummary>>(`/runs?${params}`);
   },
 
@@ -129,12 +140,30 @@ export const api = {
     return request<RunDetail>(`/runs/${encodeURIComponent(runId)}${qs ? `?${qs}` : ''}`);
   },
 
+  submitAnnotation: (runId: string, annotation: AnnotationRequest, pt?: string) => {
+    const params = new URLSearchParams();
+    if (pt) params.set('pt', pt);
+    const qs = params.toString();
+    return request<AnnotationResponse>(
+      `/runs/${encodeURIComponent(runId)}/annotation${qs ? `?${qs}` : ''}`,
+      { method: 'PUT', body: JSON.stringify(toSnakeCase(annotation)) }
+    );
+  },
+
   // --- Search ---
   search: (query: string, pt?: string) => {
     const params = new URLSearchParams({ query });
     if (pt) params.set('pt', pt);
     return request<SearchResult[]>(`/search?${params}`);
   },
+
+  // --- Online Query ---
+  onlineQuery: (params: OnlineQueryRequest) =>
+    request<OnlineQueryResponse>('/query', {
+      method: 'POST',
+      body: JSON.stringify(toSnakeCase(params)),
+      timeoutMs: ONLINE_QUERY_TIMEOUT_MS,
+    }),
 
   // --- Batch ---
   triggerBatch: (params: BatchRequest) =>

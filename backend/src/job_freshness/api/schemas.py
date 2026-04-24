@@ -12,6 +12,7 @@ from job_freshness.schemas import (
     SnippetRecallRecord,
     TemporalSignalRecord,
     TimeNormalizationRecord,
+    ValidityType,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,8 +49,7 @@ class DailySummaryResponse(BaseModel):
 class StatsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    temporal_status_distribution: dict[str, int] = Field(default_factory=dict)
-    signal_type_distribution: dict[str, int] = Field(default_factory=dict)
+    validity_type_distribution: dict[str, int] = Field(default_factory=dict)
     total_count: int = 0
     formal_count: int = 0
     fallback_count: int = 0
@@ -67,14 +67,15 @@ class RunSummary(BaseModel):
 
     run_id: str
     entity_key: str  # = info_id
-    temporal_status: str | None = None
-    signal_type: str | None = None
-    confidence: float | None = None
+    validity_type: ValidityType | None = None
+    estimated_expiry: str | None = None
     stale_risk_hint: bool | None = None
     complaint_risk_hint: ComplaintRiskHint | None = None
     route: str  # formal / fallback
     error_type: str | None = None
     timestamp: str | None = None
+    annotated_label: ValidityType | None = None
+    annotations: list["AnnotationRecord"] = Field(default_factory=list)
 
 
 class PaginatedRunList(BaseModel):
@@ -96,13 +97,42 @@ class RunDetail(BaseModel):
     snippet_recall_record: dict[str, Any] | None = None
     signal_detection_record: dict[str, Any] | None = None
     time_normalization_record: dict[str, Any] | None = None
-    temporal_signal_record: TemporalSignalRecord | None = None
-    risk_record: RiskRecord | None = None
-    decision_record: FreshnessDecisionRecord | None = None
+    temporal_signal_record: dict[str, Any] | None = None
+    risk_record: dict[str, Any] | None = None
+    decision_record: dict[str, Any] | None = None
     route: str
     error_type: str | None = None
     audit: dict[str, Any] = Field(default_factory=dict)
     timing_ms: dict[str, float] | None = None
+    annotations: list["AnnotationRecord"] = Field(default_factory=list)
+
+
+class AnnotationRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    entity_key: str
+    annotated_label: ValidityType
+    reviewer_notes: str = ""
+    reviewer_name: str = ""
+    created_at: str
+
+
+class AnnotationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotated_label: ValidityType
+    reviewer_notes: str = ""
+    reviewer_name: str = ""
+
+
+class AnnotationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    annotated_label: ValidityType
+    status: str = "annotated"
+    annotation_count: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +142,8 @@ class RunDetail(BaseModel):
 
 class SearchResult(BaseModel):
     entity_key: str  # = info_id
-    temporal_status: str | None = None
-    signal_type: str | None = None
+    validity_type: str | None = None
+    estimated_expiry: str | None = None
     route: str
     run_id: str
 
@@ -234,6 +264,7 @@ class SettingsResponse(BaseModel):
     provider_rate_limit_per_minute: int
     max_in_flight: int
     batch_max_rows: int
+    fetch_only_filled_complaints: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -244,6 +275,31 @@ class SettingsUpdate(BaseModel):
     provider_rate_limit_per_minute: int | None = Field(default=None, ge=1)
     max_in_flight: int | None = Field(default=None, ge=1)
     batch_max_rows: int | None = Field(default=None, ge=1, le=100)
+    fetch_only_filled_complaints: bool | None = None
+
+
+# ---------------------------------------------------------------------------
+# 任务状态追踪
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 在线查询
+# ---------------------------------------------------------------------------
+
+
+class OnlineQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    info_ids: list[str]
+    pt: str
+
+
+class OnlineQueryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[RunDetail]
+    not_found: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

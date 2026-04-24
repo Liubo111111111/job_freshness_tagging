@@ -27,27 +27,23 @@ export interface ComplaintRiskHint {
 }
 
 export interface RiskRecord {
-  staleRiskHint: boolean;
-  complaintRiskHint: ComplaintRiskHint;
+  isFilled: boolean;
+  fillStatus: 'confirmed_filled' | 'suspected_filled' | 'not_filled';
+  isUnreachable: boolean;
+  complaintSummary: string;
+  estimatedFilledAt: string | null;
+  estimatedFilledReason: string;
   riskScore: number;
   riskReasons: string[];
   confidence: number;
+  staleRiskHint: boolean;
+  complaintRiskHint: ComplaintRiskHint | null;
 }
 
 export interface FreshnessDecisionRecord {
-  temporalStatus: string;
-  signalType: string;
-  workStartAt: string | null;
-  recruitmentValidUntil: string | null;
-  durationHours: number | null;
-  normalizable: boolean;
-  confidence: number;
-  staleRiskHint: boolean;
-  complaintRiskHint: ComplaintRiskHint;
-  riskScore: number;
-  riskReasons: string[];
-  evidenceSummary: string[];
-  decisionReason: string;
+  validityType: string;
+  estimatedExpiry: string | null;
+  reason: string;
   lowConfidence: boolean;
 }
 
@@ -57,8 +53,7 @@ export interface StatsResponse {
   totalCount: number;
   formalCount: number;
   fallbackCount: number;
-  temporalStatusDistribution: Record<string, number>;
-  signalTypeDistribution: Record<string, number>;
+  validityTypeDistribution: Record<string, number>;
 }
 
 // --- 日期分区 ---
@@ -89,14 +84,15 @@ export interface DailySummaryResponse {
 export interface RunSummary {
   runId: string;
   entityKey: string;
-  temporalStatus: string | null;
-  signalType: string | null;
-  confidence: number | null;
+  validityType: string | null;
+  estimatedExpiry: string | null;
   staleRiskHint: boolean | null;
   complaintRiskHint: ComplaintRiskHint | null;
   route: 'formal' | 'fallback';
   errorType: string | null;
   timestamp: string | null;
+  annotatedLabel: string | null;
+  annotations: AnnotationRecord[];
 }
 
 export interface PaginatedResponse<T> {
@@ -154,6 +150,16 @@ export interface RunDetail {
   errorType: string | null;
   audit: Record<string, unknown>;
   timingMs: Record<string, number> | null;
+  annotations: AnnotationRecord[];
+}
+
+export interface AnnotationRecord {
+  runId: string;
+  entityKey: string;
+  annotatedLabel: string;
+  reviewerNotes: string;
+  reviewerName: string;
+  createdAt: string;
 }
 
 // --- 搜索 ---
@@ -162,6 +168,18 @@ export interface SearchResult {
   entityKey: string;
   route: string;
   runId: string;
+}
+
+// --- 在线查询 ---
+
+export interface OnlineQueryRequest {
+  infoIds: string[];
+  pt: string;
+}
+
+export interface OnlineQueryResponse {
+  results: RunDetail[];
+  notFound: string[];
 }
 
 // --- 批量任务 ---
@@ -198,6 +216,19 @@ export interface ReviewResponse {
   status: string;
 }
 
+export interface AnnotationRequest {
+  annotatedLabel: string;
+  reviewerNotes?: string;
+  reviewerName?: string;
+}
+
+export interface AnnotationResponse {
+  runId: string;
+  annotatedLabel: string;
+  status: string;
+  annotationCount: number;
+}
+
 // --- Auth ---
 
 export interface AuthUser {
@@ -231,6 +262,7 @@ export interface SettingsResponse {
   providerRateLimitPerMinute: number;
   maxInFlight: number;
   batchMaxRows: number;
+  fetchOnlyFilledComplaints: boolean;
 }
 
 export interface SettingsUpdate {
@@ -241,4 +273,5 @@ export interface SettingsUpdate {
   providerRateLimitPerMinute?: number;
   maxInFlight?: number;
   batchMaxRows?: number;
+  fetchOnlyFilledComplaints?: boolean;
 }

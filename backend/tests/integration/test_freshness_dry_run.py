@@ -131,17 +131,9 @@ def _run_pipeline(
     if state.error_type is not None:
         return state
 
-    # Step 3: risk_assess（并行，但测试中顺序执行）
-    risk_service = RiskAssessService(
-        client=mock_client,
-        model_version=state.model_version_risk,
-        prompt_version=state.prompt_version_risk,
-    )
+    # Step 3: risk_assess（纯规则，不需要 LLM）
+    risk_service = RiskAssessService()
     state = risk_service.run(state)
-
-    # 如果 risk_assess 出错，提前返回
-    if state.error_type is not None:
-        return state
 
     # Step 4: time_normalization（条件执行）
     if state.signal_detection_record and state.signal_detection_record.has_temporal_signal:
@@ -295,12 +287,11 @@ class TestFallbackRoute:
         assert state.route == "fallback"
         assert state.decision_record is not None
         assert state.decision_record.low_confidence is True
-        assert state.decision_record.temporal_status == "conflict"
+        assert state.decision_record.temporal_status == "has_signal"
 
         # 验证 risk_record
         assert state.risk_record is not None
-        assert state.risk_record.stale_risk_hint is True
-        assert state.risk_record.complaint_risk_hint.has_complaint_signal is True
+        assert state.risk_record.is_filled is True
 
         # 验证双写
         self._verify_dual_write_fallback(state, tmp_path)
@@ -381,7 +372,7 @@ class TestPipelineFlow:
 
         assert state.snippet_recall_record is not None
         assert state.snippet_recall_record.has_recall is True
-        assert state.snippet_recall_record.temporal_snippet_count > 0
+        assert state.snippet_recall_record.temporal_match_count > 0
 
     def test_time_normalization_skipped_when_no_signal(self) -> None:
         """验证 no_signal 场景跳过 time_normalization LLM 调用。"""

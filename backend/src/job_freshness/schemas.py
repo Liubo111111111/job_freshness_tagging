@@ -24,6 +24,13 @@ SignalType = Literal[
 AnchorType = Literal["publish_time", "message_time", "call_time", "unknown"]
 
 ComplaintSignalType = Literal["full", "unreachable", "mixed", "other", "none"]
+FillStatus = Literal["confirmed_filled", "suspected_filled", "not_filled"]
+
+ValidityType = Literal[
+    "exact_date",       # 明确日期
+    "fuzzy_time",       # 模糊时间
+    "no_validity",      # 无时效
+]
 
 ErrorType = Literal[
     "parse_error",
@@ -54,6 +61,7 @@ class WideRow(BaseModel):
     im_message_count: int = Field(ge=0, default=0)
     call_record_count: int = Field(ge=0, default=0)
     complaint_count: int = Field(ge=0, default=0)
+    first_complaint_time: str | None = None  # 最早一次投诉时间
     publish_time: str | None = None  # 职位发布时间，可用于时间归一化锚点
 
 
@@ -159,13 +167,21 @@ class ComplaintRiskHint(BaseModel):
 
 
 class RiskRecord(BaseModel):
+    """投诉分析结果（纯规则，不调用 LLM）"""
     model_config = ConfigDict(extra="forbid")
 
-    stale_risk_hint: bool = False
-    complaint_risk_hint: ComplaintRiskHint = Field(default_factory=ComplaintRiskHint)
-    risk_score: float = Field(ge=0.0, le=1.0, default=0.0)
-    risk_reasons: list[str] = Field(default_factory=list)
-    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    is_filled: bool = False  # 是否已招满
+    fill_status: FillStatus = "not_filled"  # 三态招满状态
+    is_unreachable: bool = False  # 是否联系不上
+    complaint_summary: str = ""  # 投诉摘要
+    estimated_filled_at: str | None = None  # 预估招满时间（从投诉时间戳推断）
+    estimated_filled_reason: str = ""  # 推断依据
+    # 风险评估扩展字段
+    risk_score: float = Field(ge=0.0, le=1.0, default=0.0)  # 风险分数
+    risk_reasons: list[str] = Field(default_factory=list)  # 风险原因列表
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)  # 置信度
+    stale_risk_hint: bool = False  # 过期风险提示
+    complaint_risk_hint: ComplaintRiskHint | None = None  # 投诉风险提示
 
 
 # ---------------------------------------------------------------------------
@@ -176,17 +192,7 @@ class RiskRecord(BaseModel):
 class FreshnessDecisionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    temporal_status: TemporalStatus = "no_signal"
-    signal_type: SignalType = "no_signal"
-    work_start_at: str | None = None
-    recruitment_valid_until: str | None = None
-    duration_hours: int | None = Field(default=None, ge=0)
-    normalizable: bool = False
-    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
-    stale_risk_hint: bool = False
-    complaint_risk_hint: ComplaintRiskHint = Field(default_factory=ComplaintRiskHint)
-    risk_score: float = Field(ge=0.0, le=1.0, default=0.0)
-    risk_reasons: list[str] = Field(default_factory=list)
-    evidence_summary: list[str] = Field(default_factory=list)
-    decision_reason: str = ""
-    low_confidence: bool = False
+    validity_type: ValidityType = "no_validity"  # 有效期类型
+    estimated_expiry: str | None = None  # 预估有效期截止时间（ISO8601）
+    reason: str = ""  # 决策理由
+    low_confidence: bool = False  # 置信度低标记（用于路由判断）

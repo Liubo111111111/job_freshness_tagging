@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import time
 from typing import Any
 
 from job_freshness.graph_state import GraphState
+from job_freshness.schemas import FreshnessDecisionRecord
 from job_freshness.nodes.final_decision.parser import parse_final_decision
 from job_freshness.nodes.final_decision.prompt_builder import (
     build_final_decision_prompt,
@@ -57,14 +59,15 @@ class FinalDecisionService:
                     }
                 )
 
+            record = _apply_complaint_expiry_cap(state, record)
+
             # 确定路由：low_confidence=False AND error_type=None → formal
             route = "formal" if not record.low_confidence else "fallback"
 
             logger.info(
-                "final_decision_ok job_id=%s status=%s confidence=%.2f low_conf=%s route=%s",
+                "final_decision_ok job_id=%s validity_type=%s low_conf=%s route=%s",
                 state.wide_row.info_id,
-                record.temporal_status,
-                record.confidence,
+                record.validity_type,
                 record.low_confidence,
                 route,
             )
@@ -96,3 +99,46 @@ def _update_timing(state: GraphState, t0: float) -> dict[str, float]:
     existing = dict(state.timing_ms) if state.timing_ms else {}
     existing["final_decision"] = round(elapsed, 2)
     return existing
+
+
+def _apply_complaint_expiry_cap(
+    state: GraphState,
+    record: FreshnessDecisionRecord,
+) -> FreshnessDecisionRecord:
+    """若投诉侧存在已招满时间且早于预测截止时间，在 reason 中指出矛盾，但不修改 estimated_expiry。"""
+    complaint_expiry = getattr(state.risk_record, "estimated_filled_at", None)
+    if not complaint_expiry:
+        return record
+
+    if record.estimated_expiry is None:
+        return record
+
+    complaint_dt = _parse_datetime(complaint_expiry)
+    expiry_dt = _parse_datetime(record.estimated_expiry)
+    if complaint_dt is None or expiry_dt is None:
+        return record
+
+    if complaint_dt >= expiry_dt:
+        return record
+
+    # 投诉时间早于预测截止时间，存在矛盾，仅在 reason 中说明
+    hint = f"注意：投诉已招满时间({complaint_expiry})早于预测截止时间，存在矛盾"
+    next_reason = (record.reason or "").strip()
+    if hint not in next_reason:
+        next_reason = f"{next_reason}；{hint}" if next_reason else hint
+
+    return record.model_copy(
+        update={"reason": next_reason}
+    )
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None

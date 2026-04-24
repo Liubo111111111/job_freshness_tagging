@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from job_freshness.settings import load_odps_settings
+from job_freshness.nodes.risk_assess.service import has_filled_complaint_signal
+from job_freshness.settings import _env_get, load_odps_settings
 from job_freshness.sql_template import load_sql_template, render_sql
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,27 @@ _BUILD_SQL_PATH = str(
 
 _MAX_RETRIES = 3
 _RETRY_DELAY_SEC = 5
+
+
+def _fetch_only_filled_complaints_enabled() -> bool:
+    return _env_get("FETCH_ONLY_FILLED_COMPLAINTS", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _filter_filled_complaint_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered_rows: list[dict[str, Any]] = []
+    for row in rows:
+        complaint_count = row.get("complaint_count", 0)
+        complaint_text = str(row.get("complaint_content") or "")
+        if int(complaint_count or 0) <= 0:
+            continue
+        if has_filled_complaint_signal(complaint_text):
+            filtered_rows.append(row)
+    return filtered_rows
 
 
 # ---------------------------------------------------------------------------
@@ -140,12 +162,14 @@ def fetch_freshness_candidates(
     bizdate: str,
     *,
     max_rows: int | None = None,
+    only_filled_complaints: bool | None = None,
 ) -> list[dict[str, Any]]:
     """从 ads_freshness_candidates 宽表读取已聚合的候选数据。
 
     Args:
         bizdate: 分区日期，格式 yyyymmdd
         max_rows: 可选行数限制
+        only_filled_complaints: 是否仅保留投诉命中“已招满”的数据，默认读取运行时配置
 
     Returns:
         原始查询结果行列表。
@@ -153,6 +177,43 @@ def fetch_freshness_candidates(
     template = load_sql_template(_READ_SQL_PATH)
     sql = render_sql(template, bizdate, max_rows=max_rows)
     logger.info("读取宽表数据: bizdate=%s, max_rows=%s", bizdate, max_rows)
+    rows = _execute_with_retry(sql)
+    should_filter = (
+        _fetch_only_filled_complaints_enabled()
+        if only_filled_complaints is None
+        else only_filled_complaints
+    )
+    if not should_filter:
+        return rows
+
+    filtered_rows = _filter_filled_complaint_rows(rows)
+    logger.info(
+        "已启用已招满投诉筛选: bizdate=%s, 原始=%d, 保留=%d",
+        bizdate,
+        len(rows),
+        len(filtered_rows),
+    )
+    return filtered_rows
+
+
+def _quote_sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def fetch_freshness_candidates_by_info_ids(
+    bizdate: str,
+    info_ids: list[str],
+) -> list[dict[str, Any]]:
+    """按 info_id 列表从宽表精准读取候选数据。"""
+    normalized_ids = [info_id.strip() for info_id in info_ids if info_id.strip()]
+    if not normalized_ids:
+        return []
+
+    template = load_sql_template(_READ_SQL_PATH)
+    sql = render_sql(template, bizdate)
+    info_id_sql = ", ".join(_quote_sql_literal(info_id) for info_id in normalized_ids)
+    sql = f"{sql}\n  AND info_id IN ({info_id_sql})"
+    logger.info("按 info_id 读取宽表数据: bizdate=%s, info_id_count=%d", bizdate, len(normalized_ids))
     return _execute_with_retry(sql)
 
 
@@ -161,6 +222,7 @@ def fetch_and_convert(
     output_dir: str | Path = "output/data",
     format: str = "json",
     max_rows: int | None = None,
+    only_filled_complaints: bool | None = None,
 ) -> Path:
     """拉取数据并保存为 JSON 文件，供 CLI fetch / fetch-run 模式使用。
 
@@ -169,11 +231,16 @@ def fetch_and_convert(
         output_dir: 输出目录
         format: 输出格式（目前仅支持 json）
         max_rows: 可选行数限制
+        only_filled_complaints: 是否仅保留投诉命中“已招满”的数据
 
     Returns:
         写入的文件路径。
     """
-    rows = fetch_freshness_candidates(pt, max_rows=max_rows)
+    rows = fetch_freshness_candidates(
+        pt,
+        max_rows=max_rows,
+        only_filled_complaints=only_filled_complaints,
+    )
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     file_path = out / f"freshness_candidates_{pt}.json"

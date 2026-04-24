@@ -36,14 +36,9 @@ class FormalOutputWriter:
 
         record: dict = {
             "info_id": state.entity_key,
-            "temporal_status": decision.temporal_status,
-            "signal_type": decision.signal_type,
-            "work_start_at": decision.work_start_at,
-            "recruitment_valid_until": decision.recruitment_valid_until,
-            "confidence": decision.confidence,
-            "stale_risk_hint": decision.stale_risk_hint,
-            "complaint_risk_hint": decision.complaint_risk_hint.model_dump(),
-            "evidence_summary": list(decision.evidence_summary),
+            "validity_type": decision.validity_type,
+            "estimated_expiry": decision.estimated_expiry,
+            "reason": decision.reason,
             "audit": build_audit_record(
                 run_id=state.run_id,
                 entity_key=state.entity_key,

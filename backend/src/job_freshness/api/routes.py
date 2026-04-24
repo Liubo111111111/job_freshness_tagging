@@ -23,9 +23,13 @@ from job_freshness.api.schemas import (
     AccessSettingsUpdate,
     AdminAuthAuditResponse,
     AdminOverviewResponse,
+    AnnotationRequest,
+    AnnotationResponse,
     AuthSessionResponse,
     BatchAccepted,
     BatchRequest,
+    OnlineQueryRequest,
+    OnlineQueryResponse,
     SettingsUpdate,
 )
 from job_freshness.api.services import SettingsService
@@ -326,10 +330,11 @@ def create_router(
         offset: int = Query(0, ge=0),
         limit: int = Query(20, ge=1, le=100),
         pt: str = Query(None),
+        annotation_status: str | None = Query(default=None, pattern="^(annotated|unannotated)$"),
         _user=Depends(require_auth),
     ):
         services = _resolve_services(data_source_router, pt)
-        return services["run_service"].list_runs(offset, limit)
+        return services["run_service"].list_runs(offset, limit, annotation_status)
 
     @router.get("/runs/{run_id}")
     def get_run_detail(run_id: str, pt: str = Query(None), _user=Depends(require_auth)):
@@ -339,6 +344,35 @@ def create_router(
             raise HTTPException(status_code=404, detail="Run not found")
         return detail
 
+    @router.put("/runs/{run_id}/annotation", response_model=AnnotationResponse)
+    def annotate_run(
+        run_id: str,
+        req: AnnotationRequest,
+        pt: str = Query(None),
+        user=Depends(require_auth),
+    ):
+        services = _resolve_services(data_source_router, pt)
+        reviewer_name = req.reviewer_name
+        if not reviewer_name and user is not None:
+            if isinstance(user, dict):
+                reviewer_name = str(user.get("name") or user.get("en_name") or "")
+            else:
+                reviewer_name = str(
+                    getattr(user, "name", "") or getattr(user, "en_name", "")
+                )
+
+        result = services["run_service"].annotate(
+            run_id=run_id,
+            annotated_label=req.annotated_label,
+            reviewer_notes=req.reviewer_notes,
+            reviewer_name=reviewer_name,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if result.status == "max_reached":
+            raise HTTPException(status_code=400, detail="单条记录最多允许 3 次标注")
+        return result
+
     # ======================================================================
     # Search 端点（替换：按 info_id 搜索）
     # ======================================================================
@@ -347,6 +381,21 @@ def create_router(
     def search(query: str = Query(..., min_length=1), pt: str = Query(None), _user=Depends(require_auth)):
         services = _resolve_services(data_source_router, pt)
         return services["search_service"].search(query)
+
+    # ======================================================================
+    # Online Query 端点（在线查询：按 info_id 实时查询 ODPS 并执行流水线）
+    # ======================================================================
+
+    @router.post("/query", response_model=OnlineQueryResponse)
+    def online_query(req: OnlineQueryRequest, _user=Depends(require_auth)):
+        """在线查询：按 info_id 实时查询 ODPS 宽表并返回最新运行结果。"""
+        if not data_source_router.validate_pt(req.pt):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid pt format: {req.pt}. Expected yyyymmdd or _legacy",
+            )
+        service = data_source_router.build_online_query_service(req.pt)
+        return service.query(req.info_ids, req.pt)
 
     # ======================================================================
     # Batch 端点（复用）

@@ -16,6 +16,8 @@ from typing import Any
 from job_freshness.api.schemas import (
     AccessSettingsResponse,
     AccessSettingsUpdate,
+    AnnotationResponse,
+    OnlineQueryResponse,
     PaginatedRunList,
     RunDetail,
     RunSummary,
@@ -104,12 +106,11 @@ class StatsService:
         self._sqlite = _SqliteReader(sqlite_path)
 
     def get_stats(self) -> StatsResponse:
-        """返回 temporal_status 分布 + signal_type 分布。"""
+        """返回 validity_type 分布统计。"""
         if not self._sqlite.enabled:
             return StatsResponse()
 
-        temporal_status_dist: dict[str, int] = {}
-        signal_type_dist: dict[str, int] = {}
+        validity_type_dist: dict[str, int] = {}
         total_count = 0
         formal_count = 0
         fallback_count = 0
@@ -127,7 +128,7 @@ class StatsService:
                 elif route == "fallback":
                     fallback_count = cnt
 
-            # 从 decision_record_json 提取 temporal_status 和 signal_type 分布
+            # 从 decision_record_json 提取 validity_type 分布
             decision_rows = conn.execute(
                 "SELECT decision_record_json FROM pipeline_runs WHERE decision_record_json IS NOT NULL"
             ).fetchall()
@@ -135,14 +136,11 @@ class StatsService:
                 dr = self._sqlite._load_json(dr_json)
                 if dr is None:
                     continue
-                ts = dr.get("temporal_status", "unknown")
-                temporal_status_dist[ts] = temporal_status_dist.get(ts, 0) + 1
-                st = dr.get("signal_type", "unknown")
-                signal_type_dist[st] = signal_type_dist.get(st, 0) + 1
+                vt = dr.get("validity_type", "unknown")
+                validity_type_dist[vt] = validity_type_dist.get(vt, 0) + 1
 
         return StatsResponse(
-            temporal_status_distribution=temporal_status_dist,
-            signal_type_distribution=signal_type_dist,
+            validity_type_distribution=validity_type_dist,
             total_count=total_count,
             formal_count=formal_count,
             fallback_count=fallback_count,
@@ -160,61 +158,84 @@ class RunService:
     def __init__(self, sqlite_path: Path | None = None) -> None:
         self._sqlite = _SqliteReader(sqlite_path)
 
+    @staticmethod
+    def _annotation_entry(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "run_id": row["run_id"],
+            "entity_key": row["entity_key"],
+            "annotated_label": row["annotated_label"],
+            "reviewer_notes": row["reviewer_notes"],
+            "reviewer_name": row["reviewer_name"],
+            "created_at": row["created_at"],
+        }
+
+    def _annotation_map_by_entity(
+        self, conn: sqlite3.Connection
+    ) -> dict[str, list[dict[str, Any]]]:
+        rows = conn.execute(
+            """
+            SELECT run_id, entity_key, annotated_label, reviewer_notes, reviewer_name, created_at
+            FROM annotations
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+        result: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            result.setdefault(row["entity_key"], []).append(self._annotation_entry(row))
+        return result
+
     def list_runs(
         self,
         offset: int = 0,
         limit: int = 20,
+        annotation_status: str | None = None,
     ) -> PaginatedRunList:
         """返回分页的运行记录列表，包含新鲜度字段。"""
         if not self._sqlite.enabled:
             return PaginatedRunList(items=[], total=0, offset=offset, limit=limit)
 
         with self._sqlite._connect() as conn:
-            # 总数
-            total_row = conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()
-            total = total_row[0] if total_row else 0
-
-            # 分页查询（按 entity_key 去重，取最新）
+            annotations_by_entity = self._annotation_map_by_entity(conn)
             rows = conn.execute(
                 """
+                WITH latest AS (
+                    SELECT entity_key, MAX(updated_at) AS max_updated
+                    FROM pipeline_runs
+                    GROUP BY entity_key
+                )
                 SELECT
                     r.run_id,
                     r.entity_key,
                     r.route,
                     r.error_type,
                     r.decision_record_json,
-                    r.temporal_signal_json,
                     r.risk_record_json,
                     r.created_at
                 FROM pipeline_runs r
-                INNER JOIN (
-                    SELECT entity_key, MAX(updated_at) AS max_updated
-                    FROM pipeline_runs
-                    GROUP BY entity_key
-                ) latest
+                INNER JOIN latest
                     ON r.entity_key = latest.entity_key
                    AND r.updated_at = latest.max_updated
                 ORDER BY r.updated_at DESC, r.run_id DESC
-                LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
             ).fetchall()
 
-        items: list[RunSummary] = []
+        all_items: list[RunSummary] = []
         for row in rows:
             decision = self._sqlite._load_json(row["decision_record_json"])
             risk = self._sqlite._load_json(row["risk_record_json"])
+            annotations = annotations_by_entity.get(row["entity_key"], [])
+            latest_annotated = (
+                annotations[-1]["annotated_label"] if annotations else None
+            )
 
-            temporal_status: str | None = None
-            signal_type: str | None = None
-            confidence: float | None = None
+            validity_type: str | None = None
+            estimated_expiry: str | None = None
             stale_risk_hint: bool | None = None
             complaint_risk_hint: Any = None
 
             if decision:
-                temporal_status = decision.get("temporal_status")
-                signal_type = decision.get("signal_type")
-                confidence = decision.get("confidence")
+                validity_type = decision.get("validity_type")
+                estimated_expiry = decision.get("estimated_expiry")
                 stale_risk_hint = decision.get("stale_risk_hint")
                 crh = decision.get("complaint_risk_hint")
                 if crh:
@@ -223,21 +244,30 @@ class RunService:
                 stale_risk_hint = risk.get("stale_risk_hint")
                 complaint_risk_hint = risk.get("complaint_risk_hint")
 
-            items.append(
+            all_items.append(
                 RunSummary(
                     run_id=row["run_id"],
                     entity_key=row["entity_key"],
-                    temporal_status=temporal_status,
-                    signal_type=signal_type,
-                    confidence=confidence,
+                    validity_type=validity_type,
+                    estimated_expiry=estimated_expiry,
                     stale_risk_hint=stale_risk_hint,
                     complaint_risk_hint=complaint_risk_hint,
                     route=row["route"],
                     error_type=row["error_type"],
                     timestamp=row["created_at"],
+                    annotated_label=latest_annotated,
+                    annotations=annotations,
                 )
             )
 
+        filtered_items = all_items
+        if annotation_status == "annotated":
+            filtered_items = [item for item in all_items if item.annotations]
+        elif annotation_status == "unannotated":
+            filtered_items = [item for item in all_items if not item.annotations]
+
+        total = len(filtered_items)
+        items = filtered_items[offset : offset + limit]
         return PaginatedRunList(items=items, total=total, offset=offset, limit=limit)
 
     def get_run_detail(self, run_id: str) -> RunDetail | None:
@@ -300,6 +330,19 @@ class RunService:
                 """,
                 (run_id,),
             ).fetchall()
+            annotation_rows = conn.execute(
+                """
+                SELECT run_id, entity_key, annotated_label, reviewer_notes, reviewer_name, created_at
+                FROM annotations
+                WHERE entity_key = (
+                    SELECT entity_key
+                    FROM pipeline_runs
+                    WHERE run_id = ?
+                )
+                ORDER BY created_at ASC, id ASC
+                """,
+                (run_id,),
+            ).fetchall()
 
         wide_row = self._sqlite._load_json(row["wide_row_json"], {})
         raw_wide_row = self._sqlite._load_json(row["raw_wide_row_json"]) if self._sqlite._has_raw_wide_row_col else None
@@ -310,6 +353,7 @@ class RunService:
         risk_record = self._sqlite._load_json(row["risk_record_json"])
         decision_record = self._sqlite._load_json(row["decision_record_json"])
         timing_ms = self._sqlite._load_json(row["timing_ms_json"])
+        annotations = [self._annotation_entry(annotation_row) for annotation_row in annotation_rows]
 
         # 构建 audit 信息
         audit: dict[str, Any] = {
@@ -357,6 +401,70 @@ class RunService:
             error_type=row["error_type"],
             audit=audit,
             timing_ms=timing_ms,
+            annotations=annotations,
+        )
+
+    def annotate(
+        self,
+        run_id: str,
+        annotated_label: str,
+        reviewer_notes: str = "",
+        reviewer_name: str = "",
+    ) -> AnnotationResponse | None:
+        """为指定运行记录追加人工标注。"""
+        if not self._sqlite.enabled:
+            return None
+
+        with self._sqlite._connect() as conn:
+            run_row = conn.execute(
+                "SELECT entity_key FROM pipeline_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if run_row is None:
+                return None
+
+            annotation_count = conn.execute(
+                "SELECT COUNT(*) FROM annotations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            if annotation_count >= 3:
+                return AnnotationResponse(
+                    run_id=run_id,
+                    annotated_label=annotated_label,
+                    status="max_reached",
+                    annotation_count=annotation_count,
+                )
+
+            conn.execute(
+                """
+                INSERT INTO annotations (
+                    run_id,
+                    entity_key,
+                    annotated_label,
+                    reviewer_notes,
+                    reviewer_name
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    run_row["entity_key"],
+                    annotated_label,
+                    reviewer_notes,
+                    reviewer_name,
+                ),
+            )
+            conn.commit()
+
+            new_count = conn.execute(
+                "SELECT COUNT(*) FROM annotations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+
+        return AnnotationResponse(
+            run_id=run_id,
+            annotated_label=annotated_label,
+            status="annotated",
+            annotation_count=new_count,
         )
 
 
@@ -402,23 +510,109 @@ class SearchService:
         results: list[SearchResult] = []
         for row in rows:
             decision = self._sqlite._load_json(row["decision_record_json"])
-            temporal_status: str | None = None
-            signal_type: str | None = None
+            validity_type: str | None = None
+            estimated_expiry: str | None = None
             if decision:
-                temporal_status = decision.get("temporal_status")
-                signal_type = decision.get("signal_type")
+                validity_type = decision.get("validity_type")
+                estimated_expiry = decision.get("estimated_expiry")
 
             results.append(
                 SearchResult(
                     entity_key=row["entity_key"],
-                    temporal_status=temporal_status,
-                    signal_type=signal_type,
+                    validity_type=validity_type,
+                    estimated_expiry=estimated_expiry,
                     route=row["route"],
                     run_id=row["run_id"],
                 )
             )
 
         return results
+
+
+# ---------------------------------------------------------------------------
+# OnlineQueryService
+# ---------------------------------------------------------------------------
+
+
+class OnlineQueryService:
+    """按 info_id 列表实时拉取 ODPS 宽表并执行流水线。"""
+
+    def __init__(self, partition_dir: Path) -> None:
+        self._partition_dir = partition_dir
+        self._partition_dir.mkdir(parents=True, exist_ok=True)
+        self._sqlite_path = self._partition_dir / "pipeline_results.sqlite3"
+        self._run_service = RunService(self._sqlite_path)
+
+    def query(self, info_ids: list[str], pt: str) -> OnlineQueryResponse:
+        """对指定 info_ids 执行实时查询，未命中的返回 not_found。"""
+        normalized_ids: list[str] = []
+        for info_id in info_ids:
+            normalized = info_id.strip()
+            if normalized and normalized not in normalized_ids:
+                normalized_ids.append(normalized)
+
+        if not normalized_ids:
+            return OnlineQueryResponse(results=[], not_found=[])
+
+        from uuid import uuid4
+
+        from job_freshness.data_fetcher import fetch_freshness_candidates_by_info_ids
+        from job_freshness.llm.client import HttpLLMClient
+        from job_freshness.loader import load_wide_rows
+        from job_freshness.main import run_once
+        from job_freshness.writers.fallback_output import FallbackOutputWriter
+        from job_freshness.writers.formal_output import FormalOutputWriter
+        from job_freshness.writers.jsonl_store import JsonlKeyedStore
+        from job_freshness.writers.sqlite_store import SqliteResultStore
+
+        raw_rows = fetch_freshness_candidates_by_info_ids(pt, normalized_ids)
+        load_result = load_wide_rows(raw_rows)
+        wide_rows_by_info_id = {row.info_id: row for row in load_result.rows}
+
+        results: list[RunDetail] = []
+        formal_store = JsonlKeyedStore(self._partition_dir / "formal_output.jsonl")
+        fallback_store = JsonlKeyedStore(self._partition_dir / "fallback_output.jsonl")
+        sqlite_store = SqliteResultStore(self._sqlite_path)
+        llm_client: Any | None = None
+
+        try:
+            llm_client = HttpLLMClient()
+            formal_writer = FormalOutputWriter(
+                jsonl_store=formal_store,
+                sqlite_store=sqlite_store,
+            )
+            fallback_writer = FallbackOutputWriter(
+                jsonl_store=fallback_store,
+                sqlite_store=sqlite_store,
+            )
+            for info_id in normalized_ids:
+                wide_row = wide_rows_by_info_id.get(info_id)
+                if wide_row is None:
+                    continue
+
+                # 在线查询重新执行时，旧记录按 entity_key 全量覆盖。
+                formal_store.delete_by_prefix(f"{info_id}::")
+                fallback_store.delete_by_prefix(f"{info_id}::")
+                sqlite_store.delete_entity(info_id)
+
+                state = run_once(
+                    wide_row=wide_row,
+                    run_id=f"online-{uuid4().hex}",
+                    client=llm_client,
+                    formal_writer=formal_writer,
+                    fallback_writer=fallback_writer,
+                )
+                detail = self._run_service.get_run_detail(state.run_id)
+                if detail is not None:
+                    results.append(detail)
+        finally:
+            sqlite_store.close()
+            if llm_client is not None:
+                llm_client.close()
+
+        found_ids = {detail.entity_key for detail in results}
+        not_found = [info_id for info_id in normalized_ids if info_id not in found_ids]
+        return OnlineQueryResponse(results=results, not_found=not_found)
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +628,7 @@ _SETTINGS_ENV_MAP: dict[str, str] = {
     "provider_rate_limit_per_minute": "PROVIDER_RATE_LIMIT_PER_MINUTE",
     "max_in_flight": "MAX_IN_FLIGHT",
     "batch_max_rows": "BATCH_MAX_ROWS",
+    "fetch_only_filled_complaints": "FETCH_ONLY_FILLED_COMPLAINTS",
 }
 
 _RUNTIME_DEFAULTS: dict[str, int] = {
@@ -476,6 +671,7 @@ class SettingsService:
             ),
             max_in_flight=int(env.get("MAX_IN_FLIGHT", str(_RUNTIME_DEFAULTS["max_in_flight"]))),
             batch_max_rows=int(env.get("BATCH_MAX_ROWS", str(_RUNTIME_DEFAULTS["batch_max_rows"]))),
+            fetch_only_filled_complaints=self._parse_bool(env.get("FETCH_ONLY_FILLED_COMPLAINTS", "false")),
         )
 
     def get_access_settings(self) -> AccessSettingsResponse:
@@ -492,7 +688,7 @@ class SettingsService:
         for field_name, env_var in _SETTINGS_ENV_MAP.items():
             value = getattr(update, field_name, None)
             if value is not None:
-                changes[env_var] = str(value)
+                changes[env_var] = str(value).lower() if isinstance(value, bool) else str(value)
 
         if changes:
             self._patch_env_file(changes)
@@ -564,3 +760,7 @@ class SettingsService:
             if value not in normalized:
                 normalized.append(value)
         return normalized
+
+    @staticmethod
+    def _parse_bool(raw: str) -> bool:
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
